@@ -1,0 +1,26 @@
+name: 株価アラート監視
+
+on:
+  schedule:
+    # 平日9:00〜15:30の間、15分ごとに実行（UTC = JST-9）
+    - cron: '0,15,30,45 0,1,2,3,4,5,6 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Python設定
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: ライブラリインストール
+        run: pip install yfinance pandas numpy requests
+
+      - name: アラート実行
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python alert.py
