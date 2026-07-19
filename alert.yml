@@ -1,3 +1,4 @@
+.github/workflows/
 name: 株価アラート監視
 
 on:
