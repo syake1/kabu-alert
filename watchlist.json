@@ -1,18 +1,12 @@
 {
   "watchlist": [
     {
-      "code": "6507",
-      "name": "シンフォニア",
-      "days": 2,
-      "mode": "both"
-    },
-    {
       "code": "7409",
       "name": "AeroEdge",
       "days": 3,
       "mode": "both"
     }
   ],
-  "updated": "2026/07/26 02:14",
-  "count": 2
+  "updated": "2026/08/02 07:16",
+  "count": 1
 }
