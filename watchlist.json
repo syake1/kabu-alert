@@ -1,5 +1,12 @@
 {
-  "watchlist": [],
-  "updated": "2026/08/02 07:16",
-  "count": 0
+  "watchlist": [
+    {
+      "code": "7189",
+      "name": "Nishi-Nippon Financial Holdings, Inc.",
+      "days": 1,
+      "mode": "both"
+    }
+  ],
+  "updated": "2026/08/02 07:19",
+  "count": 1
 }
