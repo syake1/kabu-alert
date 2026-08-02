@@ -5,8 +5,14 @@
       "name": "Nishi-Nippon Financial Holdings, Inc.",
       "days": 1,
       "mode": "both"
+    },
+    {
+      "code": "4272",
+      "name": "Nippon Kayaku Co., Ltd.",
+      "days": 1,
+      "mode": "both"
     }
   ],
-  "updated": "2026/08/02 07:19",
-  "count": 1
+  "updated": "2026/08/02 21:20",
+  "count": 2
 }
