@@ -17,8 +17,14 @@
       "name": "Ono Pharmaceutical Co., Ltd.",
       "days": 1,
       "mode": "both"
+    },
+    {
+      "code": "3104",
+      "name": "Fujibo Holdings, Inc.",
+      "days": 1,
+      "mode": "both"
     }
   ],
-  "updated": "2026/08/02 22:03",
-  "count": 3
+  "updated": "2026/08/02 22:19",
+  "count": 4
 }
