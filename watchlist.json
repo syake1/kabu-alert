@@ -27,10 +27,16 @@
     {
       "code": "4091",
       "name": "Nippon Sanso Holdings Corporation",
+      "days": 2,
+      "mode": "both"
+    },
+    {
+      "code": "4385",
+      "name": "メルカリ",
       "days": 1,
       "mode": "both"
     }
   ],
-  "updated": "2026/08/03 21:54",
-  "count": 5
+  "updated": "2026/08/03 21:55",
+  "count": 6
 }
