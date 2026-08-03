@@ -3,6 +3,13 @@
 15分足でパラボリック転換を検知してDiscordに通知
 ・買いシグナル：パラボリック上転換＋BB中央線上抜け
 ・空売りシグナル：パラボリック下転換＋BB中央線下抜け
+
+【改善点 2026/08】
+・SAR計算の取得期間を5日→60日に延長（yfinanceの15分足で取得できる最大範囲）
+  → 毎回計算し直す際の「助走期間」を長くし、SBIチャート表示のSARとの
+    ズレを減らす。60日分計算した上で、直近の転換のみを判定に使う。
+・デバッグ用ログを追加（直近5本のSARトレンド推移をprintする）
+  → GitHub ActionsのログでSAR判定がどう動いているか後から確認できる。
 """
 import json
 import os
@@ -13,6 +20,9 @@ import yfinance as yf
 from datetime import datetime
 
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK', '')
+
+# yfinanceの15分足は最大60日分まで取得可能（それ以上は制限される）
+HIST_PERIOD = "60d"
 
 # ================================================================
 # 指標計算
@@ -65,14 +75,31 @@ def calculate_parabolic_sar(high, low, close, af_start=0.02, af_step=0.02, af_ma
 
     return pd.Series(trend, index=close.index), pd.Series(sar, index=close.index)
 
+def get_history(code):
+    """60日分の15分足を取得（キャッシュせず毎回取得）"""
+    tk = yf.Ticker(f"{code}.T")
+    hist = tk.history(period=HIST_PERIOD, interval="15m")
+    return hist
+
+def debug_log_sar(code, name, hist):
+    """直近5本のSARトレンド推移をログ出力（原因調査用）"""
+    trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
+    tail = trend.tail(5)
+    lines = []
+    for ts, t in tail.items():
+        arrow = "↑" if t == 1 else "↓"
+        lines.append(f"    {ts.strftime('%m/%d %H:%M')} : {arrow} ({t})")
+    print(f"  [DEBUG] {code} {name} 直近SARトレンド:")
+    print("\n".join(lines))
+
 # ================================================================
 # ★ 買いシグナルチェック（パラボリック上転換）
 # ================================================================
 def check_buy_signal(code, name, days):
     try:
-        tk   = yf.Ticker(f"{code}.T")
-        hist = tk.history(period="5d", interval="15m")
-        if len(hist) < 20:
+        hist = get_history(code)
+        if len(hist) < 30:
+            print(f"  → {code} データ不足 ({len(hist)}本)")
             return None
 
         bb_up, bb_mid, bb_lo = calculate_bb(hist)
@@ -82,6 +109,8 @@ def check_buy_signal(code, name, days):
         trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
         hist['SAR_trend'] = trend
         hist['SAR']       = sar
+
+        debug_log_sar(code, name, hist)
 
         latest = hist.iloc[-1]
         prev   = hist.iloc[-2]
@@ -141,6 +170,7 @@ def check_buy_signal(code, name, days):
             "bb_pos":   bb_pos,
             "signals":  signals,
             "time":     datetime.now().strftime('%m/%d %H:%M'),
+            "bar_time": latest.name.strftime('%m/%d %H:%M'),
         }
     except Exception as e:
         print(f"{code} 買いチェックエラー: {e}")
@@ -151,9 +181,9 @@ def check_buy_signal(code, name, days):
 # ================================================================
 def check_short_signal(code, name, days):
     try:
-        tk   = yf.Ticker(f"{code}.T")
-        hist = tk.history(period="5d", interval="15m")
-        if len(hist) < 20:
+        hist = get_history(code)
+        if len(hist) < 30:
+            print(f"  → {code} データ不足 ({len(hist)}本)")
             return None
 
         bb_up, bb_mid, bb_lo = calculate_bb(hist)
@@ -226,6 +256,7 @@ def check_short_signal(code, name, days):
             "bb_pos":   bb_pos,
             "signals":  signals,
             "time":     datetime.now().strftime('%m/%d %H:%M'),
+            "bar_time": latest.name.strftime('%m/%d %H:%M'),
         }
     except Exception as e:
         print(f"{code} 空売りチェックエラー: {e}")
@@ -271,11 +302,11 @@ def send_discord(result):
 {stop_emoji} {stop_label}: {result['stop']:,.0f}円
 {target_emoji} {target_label}: {result['target']:,.0f}円
 
-⏰ {result['time']}
+⏰ 通知時刻: {result['time']}（対象足: {result['bar_time']}）
 {action}
 """
-    requests.post(DISCORD_WEBHOOK, json={"content": msg.strip()})
-    print(f"✅ 通知送信: {result['code']} {result['name']} ({result['type']})")
+    resp = requests.post(DISCORD_WEBHOOK, json={"content": msg.strip()})
+    print(f"✅ 通知送信: {result['code']} {result['name']} ({result['type']}) status={resp.status_code}")
 
 # ================================================================
 # メイン処理
@@ -300,8 +331,8 @@ def main():
         with open('watchlist.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
         watchlist = data.get('watchlist', [])
-    except:
-        print("watchlist.json読み込みエラー")
+    except Exception as e:
+        print(f"watchlist.json読み込みエラー: {e}")
         return
 
     if not watchlist:
