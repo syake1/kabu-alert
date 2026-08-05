@@ -1,11 +1,13 @@
-
 name: 株価アラート監視
 
 on:
   schedule:
-    # 平日9:00〜15:30の間、15分ごとに実行（UTC = JST-9）
+    # 平日9:00~15:30の間、15分ごとに実行（UTC = JST-9）
     - cron: '0,15,30,45 0,1,2,3,4,5,6 * * 1-5'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   alert:
@@ -25,3 +27,15 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: python alert.py
+
+      - name: 通知済み状態を保存（重複通知防止）
+        run: |
+          if [ -n "$(git status --porcelain alert_state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add alert_state.json
+            git commit -m "通知状態を更新 $(date +'%Y/%m/%d %H:%M')"
+            git push
+          else
+            echo "変更なし（コミット不要）"
+          fi
