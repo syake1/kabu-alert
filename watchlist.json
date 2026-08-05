@@ -1,54 +1,5 @@
 {
-  "watchlist": [
-    {
-      "code": "7189",
-      "name": "Nishi-Nippon Financial Holdings, Inc.",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "4272",
-      "name": "Nippon Kayaku Co., Ltd.",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "4528",
-      "name": "Ono Pharmaceutical Co., Ltd.",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "3104",
-      "name": "Fujibo Holdings, Inc.",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "4091",
-      "name": "Nippon Sanso Holdings Corporation",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "4385",
-      "name": "メルカリ",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "8020",
-      "name": "Kanematsu Corporation",
-      "days": 1,
-      "mode": "both"
-    },
-    {
-      "code": "5463",
-      "name": "Maruichi Steel Tube Ltd.",
-      "days": 1,
-      "mode": "both"
-    }
-  ],
-  "updated": "2026/08/04 20:59",
-  "count": 8
+  "watchlist": [],
+  "updated": "2026/08/05 21:27",
+  "count": 0
 }
