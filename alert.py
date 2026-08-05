@@ -4,12 +4,12 @@
 ・買いシグナル：パラボリック上転換＋BB中央線上抜け
 ・空売りシグナル：パラボリック下転換＋BB中央線下抜け
 
-【改善点 2026/08】
-・SAR計算の取得期間を5日→60日に延長（yfinanceの15分足で取得できる最大範囲）
-  → 毎回計算し直す際の「助走期間」を長くし、SBIチャート表示のSARとの
-    ズレを減らす。60日分計算した上で、直近の転換のみを判定に使う。
-・デバッグ用ログを追加（直近5本のSARトレンド推移をprintする）
-  → GitHub ActionsのログでSAR判定がどう動いているか後から確認できる。
+【改善点 2026/08/06】
+・GitHub ActionsのScheduled実行は混雑時に数十分〜数時間遅延することがあるため、
+  「直近1本の転換」だけでなく「直近LOOKBACK_BARS本の間に転換がなかったか」を
+  遡ってチェックするように変更（見逃し防止）。
+・同じ転換を何度も通知しないよう、通知済みの足の時刻を alert_state.json に
+  記録し、次回以降はそれより新しい転換のみを通知する（重複通知防止）。
 """
 import json
 import os
@@ -23,6 +23,29 @@ DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK', '')
 
 # yfinanceの15分足は最大60日分まで取得可能（それ以上は制限される）
 HIST_PERIOD = "60d"
+
+# Actionsの実行遅延を考慮し、直近何本まで遡って転換をチェックするか
+# （15分足×8本＝2時間分。GitHub Actionsの遅延実績を踏まえた余裕を持った値）
+LOOKBACK_BARS = 8
+
+STATE_FILE = 'alert_state.json'
+
+# ================================================================
+# 状態管理（重複通知防止）
+# ================================================================
+def load_state():
+    try:
+        with open(STATE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_state(state):
+    with open(STATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+def state_key(code, signal_type):
+    return f"{code}_{signal_type}"
 
 # ================================================================
 # 指標計算
@@ -92,10 +115,24 @@ def debug_log_sar(code, name, hist):
     print(f"  [DEBUG] {code} {name} 直近SARトレンド:")
     print("\n".join(lines))
 
+def find_recent_transition(hist, want_prev, want_now, lookback=LOOKBACK_BARS):
+    """
+    直近lookback本の中で、want_prev→want_nowの転換が起きた「最新の」箇所を探す。
+    見つかればそのインデックス位置（hist内の絶対位置）を返す。見つからなければNone。
+    """
+    trend = hist['SAR_trend']
+    n = len(trend)
+    start = max(1, n - lookback)
+    # 新しい方から遡って最初に見つかった転換を採用（＝直近の転換）
+    for i in range(n - 1, start - 1, -1):
+        if int(trend.iloc[i-1]) == want_prev and int(trend.iloc[i]) == want_now:
+            return i
+    return None
+
 # ================================================================
 # ★ 買いシグナルチェック（パラボリック上転換）
 # ================================================================
-def check_buy_signal(code, name, days):
+def check_buy_signal(code, name, days, state):
     try:
         hist = get_history(code)
         if len(hist) < 30:
@@ -112,39 +149,46 @@ def check_buy_signal(code, name, days):
 
         debug_log_sar(code, name, hist)
 
-        latest = hist.iloc[-1]
-        prev   = hist.iloc[-2]
-
-        current_price  = float(latest['Close'])
-        bb_mid_val     = float(latest['BB_mid'])
-        bb_lo_val      = float(latest['BB_lower'])
-        bb_upper_val   = float(latest['BB_upper'])
-        sar_trend_now  = int(hist['SAR_trend'].iloc[-1])
-        sar_trend_prev = int(hist['SAR_trend'].iloc[-2])
-
-        # ★ 必須条件：パラボリック上転換
-        if not (sar_trend_prev == -1 and sar_trend_now == 1):
+        # ★ 直近LOOKBACK_BARS本の間に「上転換」がなかったか遡ってチェック
+        #   （Actionsの実行遅延で直近1本だけを見ると見逃すことがあるため）
+        idx = find_recent_transition(hist, want_prev=-1, want_now=1)
+        if idx is None:
             return None
+
+        bar = hist.iloc[idx]
+        prev_bar = hist.iloc[idx - 1]
+        bar_time_str = bar.name.isoformat()
+
+        # 重複通知防止：この転換をすでに通知済みなら何もしない
+        key = state_key(code, 'buy')
+        if state.get(key) == bar_time_str:
+            print(f"  → {code} 買いシグナルは通知済み（対象足: {bar.name.strftime('%m/%d %H:%M')}）")
+            return None
+
+        current_price  = float(bar['Close'])
+        bb_mid_val     = float(bar['BB_mid'])
+        bb_lo_val      = float(bar['BB_lower'])
+        bb_upper_val   = float(bar['BB_upper'])
 
         signals = ["🎯 パラボリック上転換✅（必須）"]
 
         # BB中央線を陽線で上抜け
-        if (latest['Close'] > bb_mid_val and
-            latest['Open']  < bb_mid_val and
-            latest['Close'] > latest['Open']):
+        if (bar['Close'] > bb_mid_val and
+            bar['Open']  < bb_mid_val and
+            bar['Close'] > bar['Open']):
             signals.append("📈 BB中央線上抜け✅")
 
         # 包み足陽線
-        if (prev['Close'] < prev['Open'] and
-            latest['Close'] > latest['Open'] and
-            latest['Close'] > prev['Open'] and
-            latest['Open']  < prev['Close']):
+        if (prev_bar['Close'] < prev_bar['Open'] and
+            bar['Close'] > bar['Open'] and
+            bar['Close'] > prev_bar['Open'] and
+            bar['Open']  < prev_bar['Close']):
             signals.append("⚡ 包み足陽線✅")
 
         # 下ヒゲ陽線
-        body       = abs(latest['Close'] - latest['Open'])
-        lower_wick = min(latest['Close'], latest['Open']) - latest['Low']
-        if latest['Close'] > latest['Open'] and body > 0 and lower_wick >= body * 1.5:
+        body       = abs(bar['Close'] - bar['Open'])
+        lower_wick = min(bar['Close'], bar['Open']) - bar['Low']
+        if bar['Close'] > bar['Open'] and body > 0 and lower_wick >= body * 1.5:
             signals.append("🔥 下ヒゲ陽線✅")
 
         # BB位置
@@ -153,10 +197,13 @@ def check_buy_signal(code, name, days):
         if bb_pos < 40:
             signals.append(f"📊 BB下限付近({bb_pos:.0f}%)✅")
 
-        stop_price   = round(float(hist['SAR'].iloc[-1]), 0)
+        stop_price   = round(float(bar['SAR']), 0)
         target_price = round(bb_upper_val, 0)
 
         priority = "🌟🌟🌟 最優先" if days >= 3 else "⭐⭐ 優先" if days >= 2 else "⭐ 監視"
+
+        # 通知済みとして記録
+        state[key] = bar_time_str
 
         return {
             "type":     "buy",
@@ -170,7 +217,7 @@ def check_buy_signal(code, name, days):
             "bb_pos":   bb_pos,
             "signals":  signals,
             "time":     datetime.now().strftime('%m/%d %H:%M'),
-            "bar_time": latest.name.strftime('%m/%d %H:%M'),
+            "bar_time": bar.name.strftime('%m/%d %H:%M'),
         }
     except Exception as e:
         print(f"{code} 買いチェックエラー: {e}")
@@ -179,7 +226,7 @@ def check_buy_signal(code, name, days):
 # ================================================================
 # ★ 空売りシグナルチェック（パラボリック下転換）
 # ================================================================
-def check_short_signal(code, name, days):
+def check_short_signal(code, name, days, state):
     try:
         hist = get_history(code)
         if len(hist) < 30:
@@ -194,42 +241,48 @@ def check_short_signal(code, name, days):
         hist['SAR_trend'] = trend
         hist['SAR']       = sar
 
-        latest = hist.iloc[-1]
-        prev   = hist.iloc[-2]
-
-        current_price  = float(latest['Close'])
-        bb_mid_val     = float(latest['BB_mid'])
-        bb_lo_val      = float(latest['BB_lower'])
-        bb_upper_val   = float(latest['BB_upper'])
-        sar_trend_now  = int(hist['SAR_trend'].iloc[-1])
-        sar_trend_prev = int(hist['SAR_trend'].iloc[-2])
-
-        # ★ 必須条件：パラボリック下転換
-        if not (sar_trend_prev == 1 and sar_trend_now == -1):
+        # ★ 直近LOOKBACK_BARS本の間に「下転換」がなかったか遡ってチェック
+        idx = find_recent_transition(hist, want_prev=1, want_now=-1)
+        if idx is None:
             return None
+
+        bar = hist.iloc[idx]
+        prev_bar = hist.iloc[idx - 1]
+        bar_time_str = bar.name.isoformat()
+
+        # 重複通知防止
+        key = state_key(code, 'short')
+        if state.get(key) == bar_time_str:
+            print(f"  → {code} 空売りシグナルは通知済み（対象足: {bar.name.strftime('%m/%d %H:%M')}）")
+            return None
+
+        current_price  = float(bar['Close'])
+        bb_mid_val     = float(bar['BB_mid'])
+        bb_lo_val      = float(bar['BB_lower'])
+        bb_upper_val   = float(bar['BB_upper'])
 
         signals = ["🎯 パラボリック下転換✅（必須）"]
 
         # BB中央線を陰線で下抜け
-        if (latest['Close'] < bb_mid_val and
-            latest['Open']  > bb_mid_val and
-            latest['Close'] < latest['Open']):
+        if (bar['Close'] < bb_mid_val and
+            bar['Open']  > bb_mid_val and
+            bar['Close'] < bar['Open']):
             signals.append("📉 BB中央線下抜け✅")
 
         # 被せ線
-        if (prev['Close'] >= prev['Open'] and
-            latest['Open'] > prev['Close'] and
-            latest['Close'] < prev['Open']):
+        if (prev_bar['Close'] >= prev_bar['Open'] and
+            bar['Open'] > prev_bar['Close'] and
+            bar['Close'] < prev_bar['Open']):
             signals.append("🔻 被せ線✅")
 
         # 上ヒゲ陰線
-        body       = abs(latest['Close'] - latest['Open'])
-        upper_wick = latest['High'] - max(latest['Close'], latest['Open'])
-        if latest['Close'] < latest['Open'] and body > 0 and upper_wick >= body * 1.5:
+        body       = abs(bar['Close'] - bar['Open'])
+        upper_wick = bar['High'] - max(bar['Close'], bar['Open'])
+        if bar['Close'] < bar['Open'] and body > 0 and upper_wick >= body * 1.5:
             signals.append("⬇️ 上ヒゲ陰線✅")
 
         # 陰線転換
-        if prev['Close'] >= prev['Open'] and latest['Close'] < latest['Open']:
+        if prev_bar['Close'] >= prev_bar['Open'] and bar['Close'] < bar['Open']:
             if "被せ線" not in " ".join(signals) and "上ヒゲ陰線" not in " ".join(signals):
                 signals.append("↓ 陰線転換✅")
 
@@ -239,10 +292,13 @@ def check_short_signal(code, name, days):
         if bb_pos > 60:
             signals.append(f"📊 BB上限付近({bb_pos:.0f}%)✅")
 
-        stop_price   = round(float(hist['SAR'].iloc[-1]), 0)
+        stop_price   = round(float(bar['SAR']), 0)
         target_price = round(bb_lo_val, 0)
 
         priority = "🌟🌟🌟 最優先" if days >= 3 else "⭐⭐ 優先" if days >= 2 else "⭐ 監視"
+
+        # 通知済みとして記録
+        state[key] = bar_time_str
 
         return {
             "type":     "short",
@@ -256,7 +312,7 @@ def check_short_signal(code, name, days):
             "bb_pos":   bb_pos,
             "signals":  signals,
             "time":     datetime.now().strftime('%m/%d %H:%M'),
-            "bar_time": latest.name.strftime('%m/%d %H:%M'),
+            "bar_time": bar.name.strftime('%m/%d %H:%M'),
         }
     except Exception as e:
         print(f"{code} 空売りチェックエラー: {e}")
@@ -340,6 +396,9 @@ def main():
         return
 
     print(f"監視銘柄数: {len(watchlist)}")
+    print(f"見逃し防止のため直近{LOOKBACK_BARS}本（約{LOOKBACK_BARS*15}分）まで遡ってチェックします")
+
+    state = load_state()
 
     # 連続日数が多い順に並べ替え
     watchlist = sorted(watchlist, key=lambda x: x.get('days', 0), reverse=True)
@@ -355,7 +414,7 @@ def main():
 
         # 買いシグナルチェック
         if mode in ('buy', 'both'):
-            result = check_buy_signal(code, name, days)
+            result = check_buy_signal(code, name, days, state)
             if result:
                 print(f"🔔 買いシグナル！: {code} {name}")
                 send_discord(result)
@@ -365,7 +424,7 @@ def main():
 
         # 空売りシグナルチェック
         if mode in ('short', 'both'):
-            result = check_short_signal(code, name, days)
+            result = check_short_signal(code, name, days, state)
             if result:
                 print(f"🔔 空売りシグナル！: {code} {name}")
                 send_discord(result)
@@ -373,6 +432,7 @@ def main():
             else:
                 print(f"  → 空売りシグナルなし")
 
+    save_state(state)
     print(f"=== 完了 アラート{alert_count}件 ===")
 
 if __name__ == "__main__":
