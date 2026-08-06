@@ -28,6 +28,10 @@ HIST_PERIOD = "60d"
 # （15分足×8本＝2時間分。GitHub Actionsの遅延実績を踏まえた余裕を持った値）
 LOOKBACK_BARS = 8
 
+# 継続シグナル（トレンド継続中の新高値・新安値更新）を判定する際の遡り本数
+# （15分足×20本＝5時間分＝ほぼ1取引日）
+CONTINUATION_LOOKBACK = 20
+
 STATE_FILE = 'alert_state.json'
 
 # ================================================================
@@ -104,6 +108,24 @@ def get_history(code):
     hist = tk.history(period=HIST_PERIOD, interval="15m")
     return hist
 
+def prepare_data(code):
+    """
+    履歴取得＋BB・SAR計算をまとめて行う（転換チェック・継続チェックで共有）。
+    データ不足の場合はNoneを返す。
+    """
+    hist = get_history(code)
+    if len(hist) < 30:
+        return None
+
+    bb_up, bb_mid, bb_lo = calculate_bb(hist)
+    hist['BB_upper'] = bb_up
+    hist['BB_mid']   = bb_mid
+    hist['BB_lower'] = bb_lo
+    trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
+    hist['SAR_trend'] = trend
+    hist['SAR']       = sar
+    return hist
+
 def debug_log_sar(code, name, hist):
     """直近5本のSARトレンド推移をログ出力（原因調査用）"""
     trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
@@ -129,24 +151,27 @@ def find_recent_transition(hist, want_prev, want_now, lookback=LOOKBACK_BARS):
             return i
     return None
 
+def is_new_high(hist, lookback=CONTINUATION_LOOKBACK):
+    """直近lookback本の中で、最新足のCloseが最高値（過去分含む）を更新しているか"""
+    n = len(hist)
+    if n < lookback + 1:
+        return False
+    window = hist['Close'].iloc[n - lookback - 1:n]
+    return float(window.iloc[-1]) == float(window.max()) and float(window.iloc[-1]) > float(window.iloc[:-1].max())
+
+def is_new_low(hist, lookback=CONTINUATION_LOOKBACK):
+    """直近lookback本の中で、最新足のCloseが最安値（過去分含む）を更新しているか"""
+    n = len(hist)
+    if n < lookback + 1:
+        return False
+    window = hist['Close'].iloc[n - lookback - 1:n]
+    return float(window.iloc[-1]) == float(window.min()) and float(window.iloc[-1]) < float(window.iloc[:-1].min())
+
 # ================================================================
 # ★ 買いシグナルチェック（パラボリック上転換）
 # ================================================================
-def check_buy_signal(code, name, days, state):
+def check_buy_signal(code, name, days, state, hist):
     try:
-        hist = get_history(code)
-        if len(hist) < 30:
-            print(f"  → {code} データ不足 ({len(hist)}本)")
-            return None
-
-        bb_up, bb_mid, bb_lo = calculate_bb(hist)
-        hist['BB_upper'] = bb_up
-        hist['BB_mid']   = bb_mid
-        hist['BB_lower'] = bb_lo
-        trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
-        hist['SAR_trend'] = trend
-        hist['SAR']       = sar
-
         debug_log_sar(code, name, hist)
 
         # ★ 直近LOOKBACK_BARS本の間に「上転換」がなかったか遡ってチェック
@@ -226,21 +251,8 @@ def check_buy_signal(code, name, days, state):
 # ================================================================
 # ★ 空売りシグナルチェック（パラボリック下転換）
 # ================================================================
-def check_short_signal(code, name, days, state):
+def check_short_signal(code, name, days, state, hist):
     try:
-        hist = get_history(code)
-        if len(hist) < 30:
-            print(f"  → {code} データ不足 ({len(hist)}本)")
-            return None
-
-        bb_up, bb_mid, bb_lo = calculate_bb(hist)
-        hist['BB_upper'] = bb_up
-        hist['BB_mid']   = bb_mid
-        hist['BB_lower'] = bb_lo
-        trend, sar = calculate_parabolic_sar(hist['High'], hist['Low'], hist['Close'])
-        hist['SAR_trend'] = trend
-        hist['SAR']       = sar
-
         # ★ 直近LOOKBACK_BARS本の間に「下転換」がなかったか遡ってチェック
         idx = find_recent_transition(hist, want_prev=1, want_now=-1)
         if idx is None:
@@ -319,6 +331,109 @@ def check_short_signal(code, name, days, state):
         return None
 
 # ================================================================
+# ★ 買い継続シグナルチェック（トレンド継続中の新高値更新）
+#   SARの転換イベントが起きていなくても、既に上昇トレンドが続いている
+#   銘柄が新高値を更新したタイミングで拾う。
+# ================================================================
+def check_buy_continuation(code, name, days, state, hist):
+    try:
+        last_trend = int(hist['SAR_trend'].iloc[-1])
+        if last_trend != 1:
+            return None  # 上昇トレンド中でなければ対象外
+
+        if not is_new_high(hist):
+            return None
+
+        bar = hist.iloc[-1]
+        bar_time_str = bar.name.isoformat()
+
+        # 重複通知防止：同じ足をすでに通知済みなら何もしない
+        key = state_key(code, 'buy_cont')
+        if state.get(key) == bar_time_str:
+            return None
+
+        current_price = float(bar['Close'])
+        bb_upper_val   = float(bar['BB_upper'])
+        bb_lo_val      = float(bar['BB_lower'])
+        bb_range = bb_upper_val - bb_lo_val
+        bb_pos   = ((current_price - bb_lo_val) / bb_range * 100) if bb_range > 0 else 50
+
+        stop_price   = round(float(bar['SAR']), 0)
+        target_price = round(bb_upper_val, 0)
+        priority = "🌟🌟🌟 最優先" if days >= 3 else "⭐⭐ 優先" if days >= 2 else "⭐ 監視"
+
+        state[key] = bar_time_str
+
+        return {
+            "type":     "buy",
+            "continuation": True,
+            "code":     code,
+            "name":     name,
+            "days":     days,
+            "priority": priority,
+            "price":    current_price,
+            "stop":     stop_price,
+            "target":   target_price,
+            "bb_pos":   bb_pos,
+            "signals":  [f"📈 上昇トレンド継続中の新高値更新✅（直近{CONTINUATION_LOOKBACK}本）"],
+            "time":     datetime.now().strftime('%m/%d %H:%M'),
+            "bar_time": bar.name.strftime('%m/%d %H:%M'),
+        }
+    except Exception as e:
+        print(f"{code} 買い継続チェックエラー: {e}")
+        return None
+
+# ================================================================
+# ★ 空売り継続シグナルチェック（トレンド継続中の新安値更新）
+# ================================================================
+def check_short_continuation(code, name, days, state, hist):
+    try:
+        last_trend = int(hist['SAR_trend'].iloc[-1])
+        if last_trend != -1:
+            return None  # 下降トレンド中でなければ対象外
+
+        if not is_new_low(hist):
+            return None
+
+        bar = hist.iloc[-1]
+        bar_time_str = bar.name.isoformat()
+
+        key = state_key(code, 'short_cont')
+        if state.get(key) == bar_time_str:
+            return None
+
+        current_price = float(bar['Close'])
+        bb_upper_val   = float(bar['BB_upper'])
+        bb_lo_val      = float(bar['BB_lower'])
+        bb_range = bb_upper_val - bb_lo_val
+        bb_pos   = ((current_price - bb_lo_val) / bb_range * 100) if bb_range > 0 else 50
+
+        stop_price   = round(float(bar['SAR']), 0)
+        target_price = round(bb_lo_val, 0)
+        priority = "🌟🌟🌟 最優先" if days >= 3 else "⭐⭐ 優先" if days >= 2 else "⭐ 監視"
+
+        state[key] = bar_time_str
+
+        return {
+            "type":     "short",
+            "continuation": True,
+            "code":     code,
+            "name":     name,
+            "days":     days,
+            "priority": priority,
+            "price":    current_price,
+            "stop":     stop_price,
+            "target":   target_price,
+            "bb_pos":   bb_pos,
+            "signals":  [f"📉 下降トレンド継続中の新安値更新✅（直近{CONTINUATION_LOOKBACK}本）"],
+            "time":     datetime.now().strftime('%m/%d %H:%M'),
+            "bar_time": bar.name.strftime('%m/%d %H:%M'),
+        }
+    except Exception as e:
+        print(f"{code} 空売り継続チェックエラー: {e}")
+        return None
+
+# ================================================================
 # Discord通知
 # ================================================================
 def send_discord(result):
@@ -329,15 +444,17 @@ def send_discord(result):
     signals_str = "\n".join(result['signals'])
     is_buy      = result['type'] == 'buy'
 
+    is_cont = result.get('continuation', False)
+
     if is_buy:
-        header   = "🔔 **【買いシグナル点灯】**"
+        header   = "🔔 **【買い継続シグナル点灯】**" if is_cont else "🔔 **【買いシグナル点灯】**"
         action   = "📱 SBIアプリで確認→**成行買い**を検討"
         stop_label   = "損切り（SAR下）"
         target_label = "利確目標（BB上限）"
         stop_emoji   = "🔴"
         target_emoji = "🟢"
     else:
-        header   = "🔔 **【空売りシグナル点灯】**"
+        header   = "🔔 **【空売り継続シグナル点灯】**" if is_cont else "🔔 **【空売りシグナル点灯】**"
         action   = "📱 SBIアプリで確認→**空売り成行**を検討"
         stop_label   = "損切り（SAR上）"
         target_label = "利確目標（BB下限）"
@@ -412,25 +529,42 @@ def main():
 
         print(f"チェック中: {code} {name} ({days}日連続) mode={mode}")
 
-        # 買いシグナルチェック
-        if mode in ('buy', 'both'):
-            result = check_buy_signal(code, name, days, state)
-            if result:
-                print(f"🔔 買いシグナル！: {code} {name}")
-                send_discord(result)
-                alert_count += 1
-            else:
-                print(f"  → 買いシグナルなし")
+        hist = prepare_data(code)
+        if hist is None:
+            print(f"  → {code} データ不足")
+            continue
 
-        # 空売りシグナルチェック
-        if mode in ('short', 'both'):
-            result = check_short_signal(code, name, days, state)
+        # 買いシグナルチェック（①転換 → ②転換なければ継続）
+        if mode in ('buy', 'both'):
+            result = check_buy_signal(code, name, days, state, hist)
             if result:
-                print(f"🔔 空売りシグナル！: {code} {name}")
+                print(f"🔔 買いシグナル（転換）！: {code} {name}")
                 send_discord(result)
                 alert_count += 1
             else:
-                print(f"  → 空売りシグナルなし")
+                result = check_buy_continuation(code, name, days, state, hist)
+                if result:
+                    print(f"🔔 買いシグナル（継続）！: {code} {name}")
+                    send_discord(result)
+                    alert_count += 1
+                else:
+                    print(f"  → 買いシグナルなし")
+
+        # 空売りシグナルチェック（①転換 → ②転換なければ継続）
+        if mode in ('short', 'both'):
+            result = check_short_signal(code, name, days, state, hist)
+            if result:
+                print(f"🔔 空売りシグナル（転換）！: {code} {name}")
+                send_discord(result)
+                alert_count += 1
+            else:
+                result = check_short_continuation(code, name, days, state, hist)
+                if result:
+                    print(f"🔔 空売りシグナル（継続）！: {code} {name}")
+                    send_discord(result)
+                    alert_count += 1
+                else:
+                    print(f"  → 空売りシグナルなし")
 
     save_state(state)
     print(f"=== 完了 アラート{alert_count}件 ===")
