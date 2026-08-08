@@ -249,6 +249,71 @@ def check_buy_signal(code, name, days, state, hist):
         return None
 
 # ================================================================
+# ★ 逆張り：BB下限タッチ検知（タッチの瞬間を即通知）
+#   SAR転換を待たず、下落相場の中でもBB下限に触れた瞬間を拾う。
+#   kabujiji側のスクリーニング基準（1.005倍）に合わせている。
+#   1日1回まで通知（同じ足で何度も鳴らさないよう日付単位でdedup）
+# ================================================================
+def check_buy_bb_touch(code, name, days, state, hist):
+    try:
+        bar = hist.iloc[-1]
+        bb_lo_val = float(bar['BB_lower'])
+        low_val   = float(bar['Low'])
+        close_val = float(bar['Close'])
+
+        touched = (low_val <= bb_lo_val * 1.005) or (close_val <= bb_lo_val * 1.005)
+        if not touched:
+            return None
+
+        day_str = bar.name.strftime('%Y-%m-%d')
+        key = state_key(code, 'buy_bbtouch')
+        if state.get(key) == day_str:
+            return None  # 本日はすでに通知済み
+
+        current_price = float(bar['Close'])
+        bb_mid_val   = float(bar['BB_mid'])
+        bb_upper_val = float(bar['BB_upper'])
+
+        signals = ["🎯 BB下限タッチ✅（逆張り・必須）"]
+
+        # 下ヒゲ陽線（反発の初期サイン）
+        body       = abs(bar['Close'] - bar['Open'])
+        lower_wick = min(bar['Close'], bar['Open']) - bar['Low']
+        if bar['Close'] > bar['Open'] and body > 0 and lower_wick >= body * 1.5:
+            signals.append("🔥 下ヒゲ陽線✅")
+
+        sar_trend = int(bar['SAR_trend'])
+        if sar_trend == 1:
+            signals.append("📈 SARすでに上向き")
+        else:
+            signals.append("⚠️ SARはまだ下向き（先回りエントリー）")
+
+        stop_price   = round(bb_lo_val * 0.98, 0)   # BB下限からさらに2%下を損切りに
+        target_price = round(bb_mid_val, 0)          # 中央線を利確目安に
+        priority = "🌟🌟🌟 最優先" if days >= 3 else "⭐⭐ 優先" if days >= 2 else "⭐ 監視"
+
+        state[key] = day_str
+
+        return {
+            "type":     "buy",
+            "bb_touch": True,
+            "code":     code,
+            "name":     name,
+            "days":     days,
+            "priority": priority,
+            "price":    current_price,
+            "stop":     stop_price,
+            "target":   target_price,
+            "bb_pos":   0.0,
+            "signals":  signals,
+            "time":     datetime.now().strftime('%m/%d %H:%M'),
+            "bar_time": bar.name.strftime('%m/%d %H:%M'),
+        }
+    except Exception as e:
+        print(f"{code} BB下限タッチチェックエラー: {e}")
+        return None
+
+# ================================================================
 # ★ 空売りシグナルチェック（パラボリック下転換）
 # ================================================================
 def check_short_signal(code, name, days, state, hist):
@@ -444,13 +509,19 @@ def send_discord(result):
     signals_str = "\n".join(result['signals'])
     is_buy      = result['type'] == 'buy'
 
-    is_cont = result.get('continuation', False)
+    is_cont     = result.get('continuation', False)
+    is_bb_touch = result.get('bb_touch', False)
 
     if is_buy:
-        header   = "🔔 **【買い継続シグナル点灯】**" if is_cont else "🔔 **【買いシグナル点灯】**"
+        if is_bb_touch:
+            header = "🔔 **【逆張り・BB下限タッチ点灯】**"
+        elif is_cont:
+            header = "🔔 **【買い継続シグナル点灯】**"
+        else:
+            header = "🔔 **【買いシグナル点灯】**"
         action   = "📱 SBIアプリで確認→**成行買い**を検討"
-        stop_label   = "損切り（SAR下）"
-        target_label = "利確目標（BB上限）"
+        stop_label   = "損切り（BB下限-2%）" if is_bb_touch else "損切り（SAR下）"
+        target_label = "利確目標（BB中央線）" if is_bb_touch else "利確目標（BB上限）"
         stop_emoji   = "🔴"
         target_emoji = "🟢"
     else:
@@ -549,6 +620,14 @@ def main():
                     alert_count += 1
                 else:
                     print(f"  → 買いシグナルなし")
+
+            # ③ 逆張り：BB下限タッチは①②と独立してチェック（同時に成立してもOK）
+            #   下落相場でもタッチの瞬間を逃さないための追加シグナル
+            bb_result = check_buy_bb_touch(code, name, days, state, hist)
+            if bb_result:
+                print(f"🔔 逆張りシグナル（BB下限タッチ）！: {code} {name}")
+                send_discord(bb_result)
+                alert_count += 1
 
         # 空売りシグナルチェック（①転換 → ②転換なければ継続）
         if mode in ('short', 'both'):
