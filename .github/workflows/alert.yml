@@ -2,39 +2,46 @@ name: 株価アラート監視
 
 on:
   schedule:
-    # 平日9:00~15:30の間、15分ごとに実行（UTC = JST-9）
+    # 平日、15分ごとに実行。GitHub ActionsのcronはUTC。
+    # 0-6時UTC = 日本時間9:00-15:59。Python側でJSTの15:30までを厳密に判定する。
     - cron: '0,15,30,45 0,1,2,3,4,5,6 * * 1-5'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: kabu-alert-monitor
+  cancel-in-progress: false
+
 jobs:
   alert:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: リポジトリ取得
+        uses: actions/checkout@v4
 
       - name: Python設定
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: ライブラリインストール
-        run: pip install yfinance pandas numpy requests
+        run: pip install --disable-pip-version-check yfinance pandas requests
 
       - name: アラート実行
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TZ: Asia/Tokyo
         run: python alert.py
 
       - name: 通知済み状態を保存（重複通知防止）
         run: |
           if [ -n "$(git status --porcelain alert_state.json)" ]; then
             git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add alert_state.json
-            git commit -m "通知状態を更新 $(date +'%Y/%m/%d %H:%M')"
+            git commit -m "通知状態を更新 $(TZ=Asia/Tokyo date +'%Y/%m/%d %H:%M')"
             git push
           else
             echo "変更なし（コミット不要）"
