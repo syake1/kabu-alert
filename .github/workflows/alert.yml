@@ -25,3 +25,26 @@ jobs:
 
       - name: Python設定
         uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: ライブラリインストール
+        run: pip install --disable-pip-version-check yfinance pandas requests
+
+      - name: アラート実行
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TZ: Asia/Tokyo
+        run: python alert.py
+
+      - name: 通知済み状態を保存（重複通知防止）
+        run: |
+          if [ -n "$(git status --porcelain alert_state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add alert_state.json
+            git commit -m "通知状態を更新 $(TZ=Asia/Tokyo date +'%Y/%m/%d %H:%M')"
+            git push
+          else
+            echo "変更なし（コミット不要）"
+          fi
