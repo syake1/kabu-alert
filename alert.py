@@ -23,7 +23,7 @@ import yfinance as yf
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 HIST_PERIOD = "60d"
 INTERVAL = "15m"
-LOOKBACK_BARS = 8
+LOOKBACK_BARS = 1
 STATE_FILE = "alert_state.json"
 JST = ZoneInfo("Asia/Tokyo")
 
