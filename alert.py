@@ -24,6 +24,9 @@ import yfinance as yf
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 HIST_PERIOD = "60d"
 INTERVAL = "15m"
+BAR_MINUTES = 15
+# Yahoo側の反映が1回遅れても拾える一方、古い転換を後から通知しない上限。
+MAX_SIGNAL_DELAY = timedelta(minutes=20)
 STATE_FILE = "alert_state.json"
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -219,7 +222,7 @@ def prepare_data(code):
     # 未確定15分足を除外
     # 例: 10:00足は10:15以降に確定足として扱う
     hist = hist[
-        hist.index + timedelta(minutes=15) <= now
+        hist.index + timedelta(minutes=BAR_MINUTES) <= now
     ]
 
     if hist.empty:
@@ -257,7 +260,7 @@ def prepare_data(code):
     return hist
 
 
-def find_latest_buy_transition(hist):
+def find_latest_buy_transition(hist, now=None):
     """
     最新確定15分足だけで
     SAR 下向き → 上向き
@@ -267,7 +270,8 @@ def find_latest_buy_transition(hist):
     if hist is None or len(hist) < 2:
         return None
 
-    today = now_jst().date()
+    now = now or now_jst()
+    today = now.date()
 
     day = hist[
         hist.index.date == today
@@ -278,6 +282,20 @@ def find_latest_buy_transition(hist):
 
     prev_bar = day.iloc[-2]
     latest_bar = day.iloc[-1]
+
+    # Yahoo Financeで新しい足の反映が1回遅れることは許容するが、
+    # LOOKBACK_BARSのように古い転換を何十分も後から通知しない。
+    signal_delay = now - (
+        latest_bar.name + timedelta(minutes=BAR_MINUTES)
+    )
+
+    if signal_delay > MAX_SIGNAL_DELAY:
+        print(
+            "  → 最新データが古いため判定を見送り:"
+            f" {latest_bar.name.strftime('%H:%M')}足"
+            f" / 確定から{int(signal_delay.total_seconds() // 60)}分"
+        )
+        return None
 
     prev_trend = int(
         prev_bar["SAR_trend"]
