@@ -20,8 +20,15 @@
       "days": 1,
       "mode": "both",
       "added_price": 5516.0
+    },
+    {
+      "code": "9005",
+      "name": "9005",
+      "days": 1,
+      "mode": "both",
+      "added_price": 1642.0
     }
   ],
-  "updated": "2026/08/18 14:55",
-  "count": 3
+  "updated": "2026/08/18 14:56",
+  "count": 4
 }
