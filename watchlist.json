@@ -6,8 +6,15 @@
       "days": 1,
       "mode": "both",
       "added_price": 1326.0
+    },
+    {
+      "code": "7157",
+      "name": "7157",
+      "days": 1,
+      "mode": "both",
+      "added_price": 1502.0
     }
   ],
   "updated": "2026/08/18 14:53",
-  "count": 1
+  "count": 2
 }
