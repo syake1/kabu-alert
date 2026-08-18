@@ -20,15 +20,8 @@
       "days": 1,
       "mode": "both",
       "added_price": 5516.0
-    },
-    {
-      "code": "3769",
-      "name": "3769",
-      "days": 1,
-      "mode": "both",
-      "added_price": 9175.0
     }
   ],
   "updated": "2026/08/18 14:55",
-  "count": 4
+  "count": 3
 }
