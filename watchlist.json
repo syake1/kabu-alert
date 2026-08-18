@@ -1,5 +1,13 @@
 {
-  "watchlist": [],
-  "updated": "2026/08/18 14:50",
-  "count": 0
+  "watchlist": [
+    {
+      "code": "3884",
+      "name": "3884",
+      "days": 1,
+      "mode": "both",
+      "added_price": null
+    }
+  ],
+  "updated": "2026/08/18 14:51",
+  "count": 1
 }
