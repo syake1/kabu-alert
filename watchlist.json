@@ -27,8 +27,22 @@
       "days": 1,
       "mode": "both",
       "added_price": 1642.0
+    },
+    {
+      "code": "8424",
+      "name": "芙蓉総合リース",
+      "days": 1,
+      "mode": "both",
+      "added_price": 4352.0
+    },
+    {
+      "code": "7181",
+      "name": "かんぽ生命保険",
+      "days": 1,
+      "mode": "both",
+      "added_price": 1632.0
     }
   ],
-  "updated": "2026/08/18 14:56",
-  "count": 4
+  "updated": "2026/08/19 14:54",
+  "count": 6
 }
